@@ -532,14 +532,14 @@ namespace mariadb
   }
 
 
-  Shared::Results ProtocolLoggingProxy::getActiveStreamingResult()
+  Results* ProtocolLoggingProxy::getActiveStreamingResult()
 	{
 		/* Add here logging if needed */
 	  return protocol->getActiveStreamingResult();
 	}
 
 
-  void ProtocolLoggingProxy::setActiveStreamingResult(Shared::Results& mariaSelectResultSet)
+  void ProtocolLoggingProxy::setActiveStreamingResult(Results* mariaSelectResultSet)
 	{
 		/* Add here logging if needed */
 	  protocol->setActiveStreamingResult(mariaSelectResultSet);
@@ -645,7 +645,7 @@ namespace mariadb
 	MariaDBExceptionThrower ProtocolLoggingProxy::handleIoException(std::runtime_error& initialException, bool throwRightAway)
 	{
 		/* Add here logging if needed */
-	  return protocol->handleIoException(initialException);
+	  return protocol->handleIoException(initialException, throwRightAway);
 	}
 
 
@@ -708,6 +708,14 @@ namespace mariadb
 	void ProtocolLoggingProxy::reconnect()
 	{
 		protocol->reconnect();
+	}
+
+
+	void ProtocolLoggingProxy::skipAllResults() {
+		protocol->skipAllResults();
+	}
+	void ProtocolLoggingProxy::skipAllResults(ServerPrepareResult* spr) {
+		protocol->skipAllResults(spr);
 	}
 }
 }

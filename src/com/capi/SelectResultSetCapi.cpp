@@ -1,5 +1,5 @@
 /************************************************************************************
-   Copyright (C) 2020, 2022 MariaDB Corporation AB
+   Copyright (C) 2020, 2023 MariaDB Corporation AB
 
    This library is free software; you can redistribute it and/or
    modify it under the terms of the GNU Library General Public
@@ -57,31 +57,25 @@ namespace capi
                                            ServerPrepareResult* spr,
                                            bool callableResult,
                                            bool eofDeprecated)
-    : statement(results->getStatement()),
-      isClosedFlag(false),
-      protocol(protocol),
+    :
       options(protocol->getOptions()),
-      noBackslashEscapes(protocol->noBackslashEscapes()),
       columnsInformation(spr->getColumns()),
-      columnNameMap(new ColumnNameMap(columnsInformation)),
       columnInformationLength(static_cast<int32_t>(columnsInformation.size())),
-      fetchSize(results->getFetchSize()),
-      dataSize(0),
-      resultSetScrollType(results->getResultSetScrollType()),
-      dataFetchTime(0),
-      rowPointer(-1),
+      noBackslashEscapes(protocol->noBackslashEscapes()),
+      protocol(protocol),
       callableResult(callableResult),
-      eofDeprecated(eofDeprecated),
-      isEof(false),
+      statement(results->getStatement()),
       capiConnHandle(nullptr),
       capiStmtHandle(spr->getStatementId()),
-      timeZone(nullptr),
-      forceAlias(false),
-      lastRowPointer(-1)
-    //      timeZone(protocol->getTimeZone(),
+      dataSize(0),
+      fetchSize(results->getFetchSize()),
+      resultSetScrollType(results->getResultSetScrollType()),
+      columnNameMap(columnsInformation),
+      eofDeprecated(eofDeprecated),
+      forceAlias(false)
   {
     if (fetchSize == 0 || callableResult) {
-      data.reserve(10);//= new char[10]; // This has to be array of arrays. Need to decide what to use for its representation
+      data.reserve(10);
       if (mysql_stmt_store_result(capiStmtHandle)) {
         throwStmtError(capiStmtHandle);
       }
@@ -92,8 +86,7 @@ namespace capi
     else {
       lock= protocol->getLock();
 
-      Shared::Results shRes(results);
-      protocol->setActiveStreamingResult(shRes);
+      protocol->setActiveStreamingResult(results);
 
       protocol->removeHasMoreResults();
       data.reserve(std::max(10, fetchSize)); // Same
@@ -104,28 +97,25 @@ namespace capi
     row.reset(new capi::BinRowProtocolCapi(columnsInformation, columnInformationLength, results->getMaxFieldSize(), options, capiStmtHandle));
   }
 
+
   SelectResultSetCapi::SelectResultSetCapi(Results * results,
                                            Protocol * _protocol,
                                            MYSQL* capiConnHandle,
                                            bool eofDeprecated)
-    : statement(results->getStatement()),
-      isClosedFlag(false),
-      protocol(_protocol),
+    :
       options(_protocol->getOptions()),
       noBackslashEscapes(_protocol->noBackslashEscapes()),
-      fetchSize(results->getFetchSize()),
-      dataSize(0),
-      resultSetScrollType(results->getResultSetScrollType()),
-      dataFetchTime(0),
-      rowPointer(-1),
+      protocol(_protocol),
       callableResult(false),
-      eofDeprecated(eofDeprecated),
-      isEof(false),
+      statement(results->getStatement()),
       capiConnHandle(capiConnHandle),
       capiStmtHandle(nullptr),
-      timeZone(nullptr),
-      forceAlias(false),
-      lastRowPointer(-1)
+      dataSize(0),
+      fetchSize(results->getFetchSize()),
+      resultSetScrollType(results->getResultSetScrollType()),
+      columnNameMap(columnsInformation),
+      eofDeprecated(eofDeprecated),
+      forceAlias(false)
   {
     MYSQL_RES* textNativeResults= nullptr;
     if (fetchSize == 0 || callableResult) {
@@ -140,10 +130,8 @@ namespace capi
       resetVariables();
     }
     else {
-      lock = protocol->getLock();
-      //TODO: This may be wrong. We get plain ptr and putting it to smart ptr, which will eventually destrct the object w/out object's owner control
-      Shared::Results shRes(results);
-      protocol->setActiveStreamingResult(shRes);
+      lock= protocol->getLock();
+      protocol->setActiveStreamingResult(results);
 
       protocol->removeHasMoreResults();
       data.reserve(std::max(10, fetchSize)); // Same
@@ -160,7 +148,7 @@ namespace capi
     }
     row.reset(new capi::TextRowProtocolCapi(results->getMaxFieldSize(), options, textNativeResults));
 
-    columnNameMap.reset(new ColumnNameMap(columnsInformation));
+    //columnNameMap.init(columnsInformation);
     columnInformationLength= static_cast<int32_t>(columnsInformation.size());
 
     if (streaming) {
@@ -183,37 +171,40 @@ namespace capi
     std::vector<std::vector<sql::bytes>>& resultSet,
     Protocol* _protocol,
     int32_t resultSetScrollType)
-    : statement(nullptr),
-      protocol(_protocol),
-      row(new capi::TextRowProtocolCapi(0, this->options, nullptr)),
-      data(std::move(resultSet)),
-      dataSize(data.size()),
-      isClosedFlag(false),
+    :
       columnsInformation(columnInformation),
-      columnNameMap(new ColumnNameMap(columnsInformation)),
       columnInformationLength(static_cast<int32_t>(columnInformation.size())),
+      noBackslashEscapes(false),
+      protocol(_protocol),
       isEof(true),
-      fetchSize(0),
-      resultSetScrollType(resultSetScrollType),
-      dataFetchTime(0),
-      rowPointer(-1),
       callableResult(false),
-      streaming(false),
+      statement(nullptr),
+      row(new capi::TextRowProtocolCapi(0, this->options, nullptr)),
       capiConnHandle(nullptr),
       capiStmtHandle(nullptr),
-      timeZone(nullptr),
-      forceAlias(false),
-      lastRowPointer(-1),
+      streaming(false),
+      data(std::move(resultSet)),
+      dataSize(data.size()),
+      fetchSize(0),
+      resultSetScrollType(resultSetScrollType),
+      rowPointer(-1),
+      columnNameMap(columnsInformation),
       eofDeprecated(false),
-      noBackslashEscapes(false)
+      forceAlias(false)
   {
     if (protocol != nullptr) {
       this->options= protocol->getOptions();
-      this->timeZone= protocol->getTimeZone();
     }
-    else {
-      // this->timeZone= TimeZone.getDefault();
+  }
+
+
+  SelectResultSetCapi::~SelectResultSetCapi()
+  {
+    if (!isFullyLoaded()) {
+      //close();
+      fetchAllResults();
     }
+    checkOut();
   }
 
   /**
@@ -287,6 +278,24 @@ namespace capi
     return 0;
   }
 
+  /* Does fetchRemaing's job, but w/out locking */
+  void SelectResultSetCapi::fetchRemainingInternal() {
+    try {
+      lastRowPointer= -1;
+      while (!isEof) {
+        addStreamingValue();
+      }
+
+    }
+    catch (SQLException& queryException) {
+      ExceptionFactory::INSTANCE.create(queryException).Throw();
+    }
+    catch (std::exception& ioe) {
+      handleIoException(ioe);
+    }
+    ++dataFetchTime;
+  }
+
   /**
     * When protocol has a current Streaming result (this) fetch all to permit another query is
     * executing.
@@ -296,20 +305,7 @@ namespace capi
   void SelectResultSetCapi::fetchRemaining() {
     if (!isEof) {
       std::lock_guard<std::mutex> localScopeLock(*lock);
-      try {
-        lastRowPointer= -1;
-        while (!isEof) {
-          addStreamingValue();
-        }
-
-      }
-      catch (SQLException& queryException) {
-        ExceptionFactory::INSTANCE.create(queryException).Throw();
-      }
-      catch (std::exception& ioe) {
-        handleIoException(ioe);
-      }
-      dataFetchTime++;
+      fetchRemainingInternal();
     }
   }
 
@@ -353,7 +349,7 @@ namespace capi
     while (fetchSizeTmp > 0 && readNextValue()) {
       fetchSizeTmp--;
     }
-    dataFetchTime++;
+    ++dataFetchTime;
   }
 
 
@@ -385,35 +381,37 @@ namespace capi
 
     case MYSQL_NO_DATA: {
       uint32_t serverStatus;
+      if (protocol) {
+        if (!eofDeprecated) {
 
-      if (!eofDeprecated) {
+          protocol->readEofPacket();
+          serverStatus= protocol->getServerStatus();
 
-        protocol->readEofPacket();
-        serverStatus= protocol->getServerStatus();
-
-        // CallableResult has been read from intermediate EOF server_status
-        // and is mandatory because :
-        //
-        // - Call query will have an callable resultSet for OUT parameters
-        //   this resultSet must be identified and not listed in JDBC statement.getResultSet()
-        //
-        // - after a callable resultSet, a OK packet is send,
-        //   but mysql before 5.7.4 doesn't send MORE_RESULTS_EXISTS flag
-        if (callableResult) {
-          serverStatus|= MORE_RESULTS_EXISTS;
+          // CallableResult has been read from intermediate EOF server_status
+          // and is mandatory because :
+          //
+          // - Call query will have an callable resultSet for OUT parameters
+          //   this resultSet must be identified and not listed in JDBC statement.getResultSet()
+          //
+          // - after a callable resultSet, a OK packet is send,
+          //   but mysql before 5.7.4 doesn't send MORE_RESULTS_EXISTS flag
+          if (callableResult) {
+            serverStatus|= MORE_RESULTS_EXISTS;
+          }
         }
-      }
-      else {
-        // OK_Packet with a 0xFE header
-        // protocol->readOkPacket()?
-        serverStatus= protocol->getServerStatus();
-        callableResult= (serverStatus & PS_OUT_PARAMETERS)!=0;
-      }
-      protocol->setServerStatus(serverStatus);
-      protocol->setHasWarnings(warningCount() > 0);
+        else {
+          // OK_Packet with a 0xFE header
+          // protocol->readOkPacket()?
+        
+          serverStatus= protocol->getServerStatus();
+          callableResult= (serverStatus & PS_OUT_PARAMETERS) != 0;
+        }
+        protocol->setServerStatus(serverStatus);
+        protocol->setHasWarnings(warningCount() > 0);
 
-      if ((serverStatus & MORE_RESULTS_EXISTS) == 0) {
-        protocol->removeActiveStreamingResult();
+        if ((serverStatus & MORE_RESULTS_EXISTS) == 0) {
+          protocol->removeActiveStreamingResult();
+        }
       }
 
       resetVariables();
@@ -503,14 +501,26 @@ namespace capi
   }*/
 
   /** Grow data array. */
-  void SelectResultSetCapi::growDataArray() {
-    int32_t newCapacity= static_cast<int32_t>(data.size() + (data.size() >>1));
-
-    if (newCapacity - MAX_ARRAY_SIZE > 0) {
-      newCapacity= MAX_ARRAY_SIZE;
+  void SelectResultSetCapi::growDataArray(bool complete) {
+    std::size_t curSize= data.size(), newSize= curSize + 1;
+    if (complete) {
+      newSize= dataSize;
     }
-    // Commenting this out so far as we do not put data from server here, thus growing is in vain
-    //data.reserve(newCapacity);
+
+    if (data.capacity() < newSize) {
+      std::size_t newCapacity= complete ? newSize : static_cast<std::size_t>(curSize + (curSize >> 1));
+
+      // I don't remember what is MAX_ARRAY_SIZE is about. it might be irrelevant for C/ODBC and C/C++
+      if (!complete && newCapacity > MAX_ARRAY_SIZE) {
+        newCapacity= static_cast<std::size_t>(MAX_ARRAY_SIZE);
+      }
+
+      data.reserve(newCapacity);
+    }
+    for (std::size_t i= curSize; i < newSize; ++i) {
+      data.push_back({});
+      data.back().reserve(columnsInformation.size());
+    }
   }
 
   /**
@@ -552,13 +562,10 @@ namespace capi
         handleIoException(ioe);
       }
     }
+    checkOut();
     resetVariables();
 
-    for (size_t i= 0; i < data.size(); i++)
-    {
-      data[i].clear();
-
-    }
+    data.clear();
 
     if (statement != nullptr) {
       statement->checkCloseOnCompletion(this);
@@ -702,7 +709,7 @@ namespace capi
           handleIoException(ioe);
         }
 
-        return dataSize == rowPointer;
+        return dataSize == static_cast<std::size_t>(rowPointer);
       }
       // has read all data and pointer is after last result
       // so result would have to always to be true,
@@ -722,7 +729,7 @@ namespace capi
       return false;
     }
     else if (isEof) {
-      return rowPointer == dataSize -1 && dataSize >0;
+      return static_cast<std::size_t>(rowPointer) == (dataSize - 1) && dataSize > 0;
     }
     else {
       // when streaming and not having read all results,
@@ -738,8 +745,7 @@ namespace capi
       }
 
       if (isEof) {
-
-        return rowPointer == dataSize -1 &&dataSize >0;
+        return static_cast<std::size_t>(rowPointer) == (dataSize - 1) && dataSize > 0;
       }
 
       return false;
@@ -1199,7 +1205,7 @@ namespace capi
 
   /** {inheritDoc}. */
   int32_t SelectResultSetCapi::findColumn(const SQLString& columnLabel) {
-    return columnNameMap->getIndex(columnLabel) + 1;
+    return columnNameMap.getIndex(columnLabel) + 1;
   }
 
 #ifdef JDBC_SPECIFIC_TYPES_IMPLEMENTED
@@ -1493,12 +1499,12 @@ namespace capi
   }
 
   /** {inheritDoc}. */
-  RowId* SelectResultSetCapi::getRowId(int32_t columnIndex) {
+  RowId* SelectResultSetCapi::getRowId(int32_t /*columnIndex*/) {
     throw ExceptionFactory::INSTANCE.notSupported("RowIDs not supported");
   }
 
   /** {inheritDoc}. */
-  RowId* SelectResultSetCapi::getRowId(const SQLString& columnLabel) {
+  RowId* SelectResultSetCapi::getRowId(const SQLString& /*columnLabel*/) {
     throw ExceptionFactory::INSTANCE.notSupported("RowIDs not supported");
   }
 
@@ -1988,12 +1994,59 @@ namespace capi
     rowPointer= pointer;
   }
 
+
+  void SelectResultSetCapi::checkOut()
+  {
+    if (released && statement != nullptr && statement->getInternalResults()) {
+      statement->getInternalResults()->checkOut(this);
+    }
+  }
+
+
   std::size_t SelectResultSetCapi::getDataSize() {
     return dataSize;
   }
 
   bool SelectResultSetCapi::isBinaryEncoded() {
     return row->isBinaryEncoded();
+  }
+
+
+  void SelectResultSetCapi::cacheCompleteLocally() {
+
+    if (fetchSize > 0) {
+      fetchRemaining();
+    }
+    else if (row->isBinaryEncoded()) {
+      if (data.size()) {
+        // we have already it cached
+        return;
+      }
+      auto preservedPosition= rowPointer;
+      // fetchRemaining does remaining stream
+      if (streaming) {
+        fetchRemainingInternal();
+      }
+      else {
+        if (rowPointer > -1) {
+          beforeFirst();
+          row->installCursorAtPosition(rowPointer > -1 ? rowPointer : 0);
+          lastRowPointer= -1;
+        }
+        growDataArray(true);
+        for (std::size_t rowNum= 0; rowNum < dataSize; ++rowNum) {
+          row->fetchNext();
+          row->cacheCurrentRow(data[rowNum], columnInformationLength);
+        }
+        for (auto& colInfo : columnsInformation) {
+          colInfo->makeLocalCopy();
+        }
+        //columnNameMap.init(columnsInformation);
+        rowPointer= preservedPosition;
+        fetchSize= 0;
+      }
+    }
+    // else it is already cached in case of Text protocol
   }
 }
 }

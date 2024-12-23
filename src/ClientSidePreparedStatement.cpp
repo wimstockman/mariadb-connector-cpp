@@ -103,7 +103,7 @@ namespace mariadb
   bool ClientSidePreparedStatement::executeInternal(int32_t fetchSize)
   {
     // valid parameters
-    for (int32_t i= 0; i <prepareResult->getParamCount(); i++) {
+    for (uint32_t i= 0; i < prepareResult->getParamCount(); ++i) {
       if (!parameters[i]) {
         logger->error("Parameter at position " + std::to_string(i + 1) + " is not set");
         exceptionFactory->raiseStatementError(connection, this)->create("Parameter at position "
@@ -162,7 +162,7 @@ namespace mariadb
   void ClientSidePreparedStatement::addBatch()
   {
     std::vector<Shared::ParameterHolder> holder(prepareResult->getParamCount());
-    for (int32_t i= 0; i < holder.size(); i++) {
+    for (uint32_t i= 0; i < holder.size(); i++) {
       holder[i]= parameters[i];
       if (!holder[i]) {
         logger->error(
@@ -206,6 +206,8 @@ namespace mariadb
       throw stmt->executeBatchExceptionEpilogue(sqle, size);
     }
     stmt->executeBatchEpilogue();
+    // Silencing compiler
+    return stmt->batchRes.wrap(nullptr, 0);
   }
 
   /**
@@ -250,6 +252,8 @@ namespace mariadb
       throw stmt->executeBatchExceptionEpilogue(sqle, size);
     }
     stmt->executeBatchEpilogue();
+    // Silencing compiler
+    return stmt->largeBatchRes.wrap(nullptr, 0);
   }
 
   /**
@@ -276,58 +280,10 @@ namespace mariadb
         protocol->getAutoIncrementIncrement(),
         nullptr,
         dummy));
-    if (protocol->executeBatchClient(
-      protocol->isMasterConnection(), stmt->getInternalResults(), prepareResult.get(), parameterList, hasLongData)) {
-      return;
-    }
 
-    // send query one by one, reading results for each query before sending another one
-    SQLException exception("");
-
-    if (stmt->queryTimeout > 0) {
-      for (auto& it: parameterList) {
-        protocol->stopIfInterrupted();
-        try {
-          protocol->executeQuery(
-            protocol->isMasterConnection(),
-            stmt->getInternalResults(),
-            prepareResult.get(),
-            it);
-        }
-        catch (SQLException& e) {
-          if (stmt->options->continueBatchOnError) {
-            exception= e;
-          }
-          else {
-            throw e;
-          }
-        }
-      }
-    }
-    else {
-      for (auto& it : parameterList) {
-        try {
-          protocol->executeQuery(
-            protocol->isMasterConnection(),
-            stmt->getInternalResults(),
-            prepareResult.get(),
-            it);
-        }
-        catch (SQLException& e) {
-          if (stmt->options->continueBatchOnError) {
-            exception= e;
-          }
-          else {
-            throw e;
-          }
-        }
-      }
-    }
-    /* We creating default exception w/out message.
-       Using that to test if we caught an exception during the execution */
-    if (*exception.getMessage() != '\0') {
-      throw exception;
-    }
+    protocol->executeBatchClient(protocol->isMasterConnection(), stmt->getInternalResults(),
+      prepareResult.get(), parameterList, hasLongData);
+    return;
   }
 
   /**
@@ -367,7 +323,7 @@ namespace mariadb
     */
   void ClientSidePreparedStatement::setParameter(int32_t parameterIndex, ParameterHolder* holder)
   {
-    if (parameterIndex >= 1 && parameterIndex < prepareResult->getParamCount() + 1) {
+    if (parameterIndex >= 1 && static_cast<std::size_t>(parameterIndex) < prepareResult->getParamCount() + 1) {
       parameters[parameterIndex - 1].reset(holder);
     }
     else {
@@ -386,7 +342,7 @@ namespace mariadb
 
       if (stmt->options->maxQuerySizeToLog > 0) {
         error.append(" - \"");
-        if (sqlQuery.size() < stmt->options->maxQuerySizeToLog) {
+        if (sqlQuery.size() < static_cast<std::size_t>(std::max(0, stmt->options->maxQuerySizeToLog))) {
           error.append(sqlQuery);
         }
         else {
@@ -472,7 +428,7 @@ namespace mariadb
   {
     SQLString sb("sql : '"+sqlQuery +"'");
     sb.append(", parameters : [");
-    for (const auto cit:parameters ) {
+    for (const auto& cit:parameters ) {
       if (!cit) {
         sb.append("NULL");
       }

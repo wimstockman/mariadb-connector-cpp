@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2008, 2018, Oracle and/or its affiliates. All rights reserved.
- *               2020, 2022 MariaDB Corporation AB
+ *               2020, 2023 MariaDB Corporation AB
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2.0, as
@@ -35,11 +35,7 @@
 #include <cstdio>
 
 #ifndef L64
-#ifdef _WIN32
-#define L64(x) x##i64
-#else
 #define L64(x) x##LL
-#endif
 #endif
 
 namespace testsuite
@@ -188,12 +184,12 @@ std::vector< columndefinition > unit_fixture::columns = {
   {"LONGTEXT", "LONGTEXT CHARSET 'utf8'", sql::DataType::LONGVARCHAR, "a", true, L64(4294967295), 0, true, "NULL", L64(4294967295), "NO", false},
   {"LONGTEXT", "LONGTEXT CHARSET 'utf8' COLLATE 'utf8_bin'", sql::DataType::LONGVARCHAR, "a", true, L64(4294967295), 0, true, "NULL", L64(4294967295), "NO", false},
   {"ENUM", "ENUM('yes', 'no')", sql::DataType::VARCHAR, "yes", true, 3, 0, true, "NULL", 3, "NO", false},
-  {"ENUM", "ENUM('yes', 'no') CHARACTER SET 'binary'", sql::DataType::VARCHAR, "yes", true, 3, 0, true, "NULL", 3, "NO", false},
+  {"ENUM", "ENUM('yes', 'no') CHARACTER SET 'binary'", sql::DataType::VARBINARY, "yes", true, 3, 0, true, "NULL", 3, "NO", false},
   {"ENUM", "ENUM('yes', 'no') NOT NULL", sql::DataType::VARCHAR, "yes", true, 3, 0, false, "", 3, "NO", false, "yes"},
   {"ENUM", "ENUM('yes', 'no', 'not sure') NOT NULL", sql::DataType::VARCHAR, "yes", true, 8, 0, false, "", 8, "NO", false},
   {"ENUM", "ENUM('yes', 'no', 'buy') NOT NULL DEFAULT 'buy'", sql::DataType::VARCHAR, "yes", true, 3, 0, false, "'buy'", 3, "NO", false},
   {"SET", "SET('yes', 'no')", sql::DataType::VARCHAR, "yes", true, 6, 0, true, "NULL", 6, "NO", false, "yes"},
-  {"SET", "SET('yes', 'no') CHARACTER SET 'binary'", sql::DataType::VARCHAR, "yes", true, 6, 0, true, "NULL", 6, "NO", false, "yes"},
+  {"SET", "SET('yes', 'no') CHARACTER SET 'binary'", sql::DataType::VARBINARY, "yes", true, 6, 0, true, "NULL", 6, "NO", false, "yes"},
   {"SET", "SET('yes', 'no') CHARSET 'ascii'", sql::DataType::VARCHAR, "yes", true, 6, 0, true, "NULL", 6, "NO", false},
   {"SET", "SET('yes', 'no') CHARSET 'ascii' DEFAULT 'yes'", sql::DataType::VARCHAR, "yes", true, 6, 0, true, "'yes'", 6, "NO", false},
   {"SET", "SET('yes', 'no', 'ascii') CHARSET 'ascii' NOT NULL", sql::DataType::VARCHAR, "yes", true, 12, 0, false, "", 12, "NO", false}
@@ -266,11 +262,11 @@ std::vector< udtattribute > unit_fixture::attributes = {
 
 unit_fixture::unit_fixture(const String & name)
 : super(name),
+useTls(false),
 con(nullptr),
 pstmt(nullptr),
 stmt(nullptr),
-res(nullptr),
-useTls(false)
+res(nullptr)
 {
   init();
 }
@@ -557,19 +553,15 @@ void unit_fixture::checkResultSetScrolling(ResultSet &res_ref)
     return;
   }
 
-  int before;
-
-  before=static_cast<int> (res_ref->getRow());
+  auto before= res_ref->getRow();
   if (!res_ref->last())
   {
     res_ref->absolute(before);
     return;
   }
 
-  int num_rows;
+  auto num_rows= res_ref->getRow();
   int i;
-
-  num_rows=(int) res_ref->getRow();
 
   res_ref->beforeFirst();
 
@@ -750,7 +742,15 @@ bool unit_fixture::isSkySqlHA() const
 
 bool unit_fixture::isMaxScale() const
 {
-  static bool MaxScaleOnTravis= (std::getenv("MAXSCALE_TEST_DISABLE") != nullptr);
+  static bool MaxScaleOnTravis= (std::getenv("MAXSCALE_TEST_DISABLE") != nullptr ||
+    std::getenv("srv") != nullptr && strcmp(std::getenv("srv"), "maxscale") == 0);
   return MaxScaleOnTravis;
+}
+
+bool unit_fixture::isMySQL() const
+{
+  static DatabaseMetaData dbmeta(con->getMetaData());
+  static bool MySQL= dbmeta->getDatabaseProductName().compare("MariaDB");
+  return MySQL;
 }
 } /* namespace testsuite */

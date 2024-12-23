@@ -252,7 +252,7 @@ void statement::callSP()
     ASSERT(stmt->execute("SELECT @version AS _version"));
     res.reset(stmt->getResultSet());
     ASSERT(res->next());
-    if (std::getenv("MAXSCALE_TEST_DISABLE") == nullptr) {
+    if (!isMaxScale()) {
       ASSERT_EQUALS(dbmeta->getDatabaseProductVersion(), res->getString("_version"));
     }
 
@@ -432,7 +432,7 @@ void statement::unbufferedFetch()
     {
       fail(e.what(), __FILE__, __LINE__);
     }
-    int option=sql::ResultSet::TYPE_FORWARD_ONLY;
+    //int option=sql::ResultSet::TYPE_FORWARD_ONLY;
     con->setSchema(db);
     //con->setClientOption("defaultStatementResultType", (static_cast<void *> (&option)));
     stmt.reset(con->createStatement());
@@ -628,7 +628,9 @@ void statement::queryTimeout()
 
 void statement::addBatch()
 {
-  Statement st2(con->createStatement());
+  // Have to test results in separate conenction as connector may turn auto commit off
+  Connection con2(getConnection());
+  Statement st2(con2->createStatement());
   createSchemaObject("TABLE", "testAddBatch", "(id int not NULL)");
   
   stmt->addBatch("INSERT INTO testAddBatch VALUES(1)");
@@ -775,6 +777,63 @@ void statement::concpp107_setFetchSizeExeption()
     ASSERT(res->next());
     ASSERT(!res->next());
   }
+}
+
+/* CONCPP-132 getMoreResults highjacks other statement's pending result */
+void statement::otherstmts_result()
+{
+  res.reset(stmt->executeQuery("SELECT 100"));
+  ASSERT(res->next());
+  ASSERT(!res->next());
+
+  Statement stmt1(con->createStatement());
+  ResultSet res1(stmt1->executeQuery("SELECT 3;SELECT 2 UNION SELECT 4"));
+  ASSERT(res1->next());
+  ASSERT(!res1->next());
+  ASSERT(!stmt->getMoreResults());
+  ASSERT(stmt->getUpdateCount() == -1);
+  ASSERT(stmt1->getMoreResults());
+  res1.reset(stmt1->getResultSet());
+  ASSERT(res1->next());
+  ASSERT_EQUALS(2, res1->getInt(1));
+  ASSERT(res1->next());
+  ASSERT_EQUALS(4, res1->getInt(1));
+  ASSERT(!res1->next());
+}
+
+
+/* CONCPP-133  */
+void statement::multirs_caching()
+{
+  Statement stmt1(con->createStatement());
+  ResultSet res1(stmt1->executeQuery("SELECT 2 UNION SELECT 4;SELECT 3;SELECT 1"));
+  ASSERT(res1->next()); // next() does not read the record - only increments internal cursor position
+  /* Executing another query - stmt1 has to cache pending results */
+  res.reset(stmt->executeQuery("SELECT 100"));
+  /* Making sure we are at same position after caching */
+  ASSERT_EQUALS(2, res1->getInt(1));
+  ASSERT(res1->next());
+  ASSERT_EQUALS(4, res1->getInt(1));
+  ASSERT(!res1->next());
+  ASSERT(stmt1->getMoreResults());
+  res1.reset(stmt1->getResultSet());
+  ASSERT(res1->next());
+  ASSERT_EQUALS(3, res1->getInt(1));
+  ASSERT(!res1->next());
+  /* Now reading 2nd query result*/
+  ASSERT(res->next());
+  ASSERT_EQUALS(100, res->getInt(1));
+  ASSERT(!res->next());
+  ASSERT(!stmt->getMoreResults());
+  ASSERT(stmt->getUpdateCount() == -1);
+  /* Getting back to 1st query */
+  ASSERT(stmt1->getMoreResults());
+  res1.reset(stmt1->getResultSet());
+  ASSERT(res1->next());
+  ASSERT_EQUALS(1, res1->getInt(1));
+  ASSERT(!res1->next());
+  ASSERT(!stmt1->getMoreResults());
+  ASSERT(stmt1->getUpdateCount() == -1);
 }
 } /* namespace statement */
 } /* namespace testsuite */

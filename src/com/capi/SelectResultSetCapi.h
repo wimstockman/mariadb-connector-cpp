@@ -55,8 +55,7 @@ namespace capi
 
 class SelectResultSetCapi : public SelectResultSet
 {
-
-  TimeZone* timeZone;
+  //TimeZone* timeZone= nullptr;
   Shared::Options options;
   std::vector<Shared::ColumnDefinition> columnsInformation;
   int32_t columnInformationLength;
@@ -64,7 +63,7 @@ class SelectResultSetCapi : public SelectResultSet
   std::map<int32_t, std::unique_ptr<memBuf>> blobBuffer;
 
   Protocol* protocol;
-  bool isEof;
+  bool isEof= false;
   bool callableResult;
   /* Shared? */
   MariaDbStatement* statement;
@@ -73,7 +72,7 @@ class SelectResultSetCapi : public SelectResultSet
   MYSQL *capiConnHandle;
   MYSQL_STMT *capiStmtHandle;
 
-  int32_t dataFetchTime;
+  int32_t dataFetchTime= 0;
   bool streaming;
 
   /*std::unique_ptr<*/
@@ -82,12 +81,12 @@ class SelectResultSetCapi : public SelectResultSet
 
   int32_t fetchSize;
   int32_t resultSetScrollType;
-  int32_t rowPointer;
+  int32_t rowPointer= -1;
 
-  std::unique_ptr<ColumnNameMap> columnNameMap;
+  ColumnNameMap columnNameMap;
 
-  int32_t lastRowPointer; /*-1*/
-  bool isClosedFlag;
+  int32_t lastRowPointer= -1;
+  bool isClosedFlag= false;
   bool eofDeprecated;
   Shared::mutex lock;
   bool forceAlias;
@@ -112,6 +111,7 @@ public:
     /*std::unique_ptr<*/std::vector<std::vector<sql::bytes>>& resultSet,
     Protocol* protocol,
     int32_t resultSetScrollType);
+  ~SelectResultSetCapi();
 
   bool isFullyLoaded() const;
 
@@ -122,6 +122,7 @@ private:
   const char* getSqlState();
   uint32_t getErrNo();
   uint32_t warningCount();
+  void fetchRemainingInternal(); // no Locking
 public:
   void fetchRemaining();
 
@@ -138,7 +139,7 @@ protected:
   void addRowData(std::vector<sql::bytes>& rawData);
 
 private:
-  void growDataArray();
+  void growDataArray(bool complete= false);
 
 public:
   void abort();
@@ -378,8 +379,10 @@ public:
 protected:
   void setRowPointer(int32_t pointer);
 public:
+  void checkOut() override;
   std::size_t getDataSize();
   bool isBinaryEncoded();
+  void cacheCompleteLocally();
   };
 
 }

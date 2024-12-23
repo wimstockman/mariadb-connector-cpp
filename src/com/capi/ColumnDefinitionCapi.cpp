@@ -69,9 +69,9 @@ namespace capi
     */
   ColumnDefinitionCapi::ColumnDefinitionCapi(const ColumnDefinitionCapi& other) :
     metadata(other.metadata),
+    owned(other.owned),
     type(other.type),
-    length(other.length),
-    owned(other.owned)
+    length(other.length)
   {
   }
 
@@ -107,6 +107,40 @@ namespace capi
 
   bool ColumnDefinitionCapi::isReadonly() const {
     return (metadata->db == nullptr || *(metadata->db) == '\0');
+  }
+
+ 
+  FieldNames::FieldNames(MYSQL_FIELD *metadata)
+  {
+    name.reserve(metadata->name_length + 1);
+    name.assign(metadata->name, metadata->name_length);
+    metadata->name= const_cast<char*>(name.c_str());
+    orgname.reserve(metadata->org_name_length + 1);
+    orgname.assign(metadata->org_name, metadata->org_name_length);
+    metadata->org_name= const_cast<char*>(orgname.c_str());
+    db.reserve(metadata->db_length + 1);
+    db.assign(metadata->db, metadata->db_length);
+    metadata->db= const_cast<char*>(db.c_str());
+    table.reserve(metadata->table_length + 1);
+    table.assign(metadata->table, metadata->table_length);
+    metadata->table= const_cast<char*>(table.c_str());
+    orgtable.reserve(metadata->org_table_length + 1);
+    orgtable.assign(metadata->org_table, metadata->org_table_length);
+    metadata->org_table= const_cast<char*>(orgtable.c_str());
+  }
+
+
+  void ColumnDefinitionCapi::makeLocalCopy()
+  {
+    // TODO: it's better to make a separate class
+    if (!owned) {
+      auto copy= new capi::MYSQL_FIELD();
+      std::memcpy(copy, metadata, sizeof(capi::MYSQL_FIELD));
+      names.reset(new FieldNames(copy));
+
+      owned.reset(copy);
+      metadata= copy;
+    }
   }
 
 

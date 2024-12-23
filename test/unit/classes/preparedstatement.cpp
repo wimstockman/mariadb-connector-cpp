@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
- *               2020, 2022 MariaDB Corporation AB
+ *               2020, 2024 MariaDB Corporation plc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2.0, as
@@ -156,6 +156,9 @@ void preparedstatement::InsertSelectAllTypes()
       {
       }
 
+      if (pstmt->getResultSetType() == sql::ResultSet::TYPE_FORWARD_ONLY) {
+        continue;
+      }
       res->beforeFirst();
       try
       {
@@ -528,7 +531,6 @@ void preparedstatement::assortedSetType()
 
   try
   {
-
     for (it=columns.end(), it--; it != columns.begin(); it--)
     {
       stmt->execute("DROP TABLE IF EXISTS test");
@@ -570,7 +572,6 @@ void preparedstatement::assortedSetType()
         ASSERT_EQUALS(1, pstmt->executeUpdate());
       }
       
-
       pstmt->clearParameters();
       try
       {
@@ -612,9 +613,25 @@ void preparedstatement::assortedSetType()
       }
 
       pstmt->clearParameters();
-      // enum won't accept 0 as a value
+      // enum won't accept 0 as a value. Same for TIMESTAMP on MySQL
       pstmt->setBoolean(1, it->name.compare("ENUM") == 0);
-      ASSERT_EQUALS(1, pstmt->executeUpdate());
+      try
+      {
+        ASSERT_EQUALS(1, pstmt->executeUpdate());
+      }
+      catch (sql::SQLException& e)
+      {
+        if (isMySQL() && (it->name.compare("TIMESTAMP") == 0 ||
+                          it->name.compare("DATETIME") == 0  ||
+                          it->name.compare("DATE") == 0))
+        {
+          ASSERT_EQUALS("22007", e.getSQLState());
+        }
+        else
+        {
+          TEST_THROW(sql::SQLException, e);
+        }
+      }
 
       pstmt->clearParameters();
       try
@@ -1176,7 +1193,7 @@ void preparedstatement::callSPInOut()
 
     try
     {
-      cstmt.reset(con->prepareCall("CALL p('myver', @version)"));
+      cstmt.reset(con->prepareCall(" {CALL p('myver', @version) }"));
       ASSERT(!cstmt->execute());
     }
     catch (sql::SQLException &e)
@@ -1223,7 +1240,80 @@ void preparedstatement::callSPInOut()
   }
 }
 
-void preparedstatement::callSPWithPS()
+void preparedstatement::callSPInOutWithPs()
+{
+  logMsg("preparedstatement::callSPInOut() - MySQL_PreparedStatement::*()");
+  std::string sp_code("CREATE PROCEDURE p(IN ver_in VARCHAR(25), OUT ver_out VARCHAR(25)) BEGIN SELECT ver_in INTO ver_out; END;");
+  bool autoCommit = con->getAutoCommit();
+
+  /* Version on the server can be different from the one reported by MaxScale. And we are testing here SP, not the connection metadata */
+  if (isSkySqlHA() || isMaxScale())
+  {
+    con->setAutoCommit(false);
+  }
+  try
+  {
+    if (!createSP(sp_code))
+    {
+      logMsg("... skipping: cannot create SP");
+      if (isSkySqlHA() || isMaxScale())
+      {
+        con->setAutoCommit(autoCommit);
+      }
+      return;
+    }
+
+    try
+    {
+      pstmt.reset(con->prepareStatement("CALL p('myver', @version)"));
+      ASSERT(!pstmt->execute());
+    }
+    catch (sql::SQLException &e)
+    {
+      if (isSkySqlHA() || isMaxScale())
+      {
+        con->setAutoCommit(autoCommit);
+      }
+      if (e.getErrorCode() != 1295)
+      {
+        logErr(e.what());
+        std::stringstream msg1;
+        msg1.str("");
+        msg1 << "SQLState: " << e.getSQLState() << ", MySQL error code: " << e.getErrorCode();
+        logErr(msg1.str());
+        fail(e.what(), __FILE__, __LINE__);
+      }
+      // PS protocol does not support CALL
+      logMsg("... skipping: PS protocol does not support CALL");
+      return;
+    }
+    pstmt.reset(con->prepareStatement("SELECT @version AS _version"));
+    res.reset(pstmt->executeQuery());
+    ASSERT(res->next());
+    ASSERT_EQUALS("myver", res->getString("_version"));
+
+    if (isSkySqlHA() || isMaxScale())
+    {
+      con->setAutoCommit(autoCommit);
+    }
+  }
+  catch (sql::SQLException &e)
+  {
+    if (isSkySqlHA() || isMaxScale())
+    {
+      con->setAutoCommit(autoCommit);
+    }
+    logErr(e.what());
+    std::stringstream msg2;
+    msg2.str("");
+    msg2 << "SQLState: " << e.getSQLState() << ", MySQL error code: " << e.getErrorCode();
+    logErr(msg2.str());
+    fail(e.what(), __FILE__, __LINE__);
+  }
+}
+
+
+void preparedstatement::callSP2()
 {
   logMsg("preparedstatement::callSPWithPS() - MySQL_PreparedStatement::*()");
 
@@ -1262,8 +1352,9 @@ void preparedstatement::callSPWithPS()
     msg2 << "... val = '" << res->getString(1) << "'";
     logMsg(msg2.str());
 
-    while(cstmt->getMoreResults())
-    {}
+    while (cstmt->getMoreResults())
+    {
+    }
 
     try
     {
@@ -1303,6 +1394,89 @@ void preparedstatement::callSPWithPS()
     }
   }
 }
+
+
+void preparedstatement::callSP2WithPS()
+{
+  logMsg("preparedstatement::callSPWithPS() - MySQL_PreparedStatement::*()");
+
+  try
+  {
+    std::string sp_code("CREATE PROCEDURE p(IN val VARCHAR(25)) BEGIN SET @sql = CONCAT('SELECT \"', val, '\"'); PREPARE stmt FROM @sql; EXECUTE stmt; DROP PREPARE stmt; END;");
+    if (!createSP(sp_code))
+    {
+      logMsg("... skipping:");
+      return;
+    }
+
+    try
+    {
+      pstmt.reset(con->prepareStatement("CALL p('abc')"));
+      res.reset(pstmt->executeQuery());
+    }
+    catch (sql::SQLException &e)
+    {
+      if (e.getErrorCode() != 1295)
+      {
+        logErr(e.what());
+        std::stringstream msg1;
+        msg1.str("");
+        msg1 << "SQLState: " << e.getSQLState() << ", MySQL error code: " << e.getErrorCode();
+        logErr(msg1.str());
+        fail(e.what(), __FILE__, __LINE__);
+      }
+      // PS interface cannot call this kind of statement
+      return;
+    }
+    ASSERT(res->next());
+    ASSERT_EQUALS("abc", res->getString(1));
+    std::stringstream msg2;
+    msg2.str("");
+    msg2 << "... val = '" << res->getString(1) << "'";
+    logMsg(msg2.str());
+
+    while(pstmt->getMoreResults())
+    {}
+
+    try
+    {
+      pstmt.reset(con->prepareCall("CALL p(?)"));
+      pstmt->setString(1, "123");
+      res.reset(pstmt->executeQuery());
+      ASSERT(res->next());
+      ASSERT_EQUALS("123", res->getString(1));
+      ASSERT(!res->next());
+    }
+    catch (sql::SQLException &e)
+    {
+      if (e.getErrorCode() != 1295)
+      {
+        logErr(e.what());
+        std::stringstream msg3;
+        msg3.str("");
+        msg3 << "SQLState: " << e.getSQLState() << ", MySQL error code: " << e.getErrorCode();
+        logErr(msg3.str());
+        fail(e.what(), __FILE__, __LINE__);
+      }
+      // PS interface cannot call this kind of statement
+      return;
+    }
+    res->close();
+  }
+  catch (sql::SQLException &e)
+  {
+    if (e.getErrorCode() != 1295)
+    {
+      logErr(e.what());
+      std::stringstream msg4;
+      msg4.str("");
+      msg4 << "SQLState: " << e.getSQLState() << ", MySQL error code: " << e.getErrorCode();
+      logErr(msg4.str());
+      fail(e.what(), __FILE__, __LINE__);
+    }
+  }
+}
+
 
 void preparedstatement::callSPMultiRes()
 {
@@ -1678,9 +1852,7 @@ void preparedstatement::executeQuery()
 
 void preparedstatement::addBatch()
 {
-  stmt->executeUpdate("DROP TABLE IF EXISTS testAddBatchPs");
-  stmt->executeUpdate("CREATE TABLE testAddBatchPs "
-    "(id int not NULL)");
+  createSchemaObject("TABLE", "testAddBatchPs", "(id int not NULL)");
 
   pstmt.reset(con->prepareStatement("INSERT INTO testAddBatchPs VALUES(?)"));
   pstmt->setInt(1, 1);
@@ -1691,7 +1863,9 @@ void preparedstatement::addBatch()
   pstmt->addBatch();
 
   const sql::Ints& batchRes = pstmt->executeBatch();
-
+  // Checking results in other connection since connector may turn autocommit off and we have to be sure
+  // that it still commits the batch
+  stmt.reset(sspsCon->createStatement());
   res.reset(stmt->executeQuery("SELECT MIN(id), MAX(id), SUM(id), count(*) FROM testAddBatchPs"));
 
   ASSERT(res->next());
@@ -1732,8 +1906,6 @@ void preparedstatement::addBatch()
   ASSERT_EQUALS(1LL, batchLRes[0]);
   ASSERT_EQUALS(1LL, batchLRes[1]);
   ASSERT_EQUALS(1LL, batchLRes[2]);
-
-  stmt->executeUpdate("DROP TABLE testAddBatchPs");
 }
 
 /* Connector wasn't precise enough with double numbers operations and could lose significant digits */
@@ -1795,7 +1967,8 @@ void preparedstatement::concpp99_batchRewrite()
   sql::ConnectOptionsMap connection_properties{{"userName", user}, {"password", passwd}, {"rewriteBatchedStatements", "true"}, {"useTls", useTls ? "true" : "false"}};
 
   con.reset(driver->connect(url, connection_properties));
-  stmt.reset(con->createStatement());
+  // Reading results must be on the different connection to ensure that the driver commits the batch
+  stmt.reset(sspsCon->createStatement());
   createSchemaObject("TABLE", "concpp99_batchRewrite", "(id int not NULL PRIMARY KEY, val VARCHAR(31) NOT NULL DEFAULT '')");
 
   const sql::SQLString insertQuery[]{"INSERT INTO concpp99_batchRewrite VALUES(?,?)",
@@ -1807,15 +1980,11 @@ void preparedstatement::concpp99_batchRewrite()
 
   for (std::size_t i= 0; i < sizeof(insertQuery) / sizeof(insertQuery[0]); ++i) {
     pstmt.reset(con->prepareStatement(insertQuery[i]));
-    //ssps.reset(sspsCon->prepareStatement(insertQuery[i]));
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (size_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       pstmt->setInt(1, id[row]);
       pstmt->setString(2, val[i][row]);
       pstmt->addBatch();
-      /*ssps->setInt(1, id[row]);
-      ssps->setString(2, val[0][row]);
-      ssps->addBatch();*/
     }
 
     const sql::Ints& batchRes = pstmt->executeBatch();
@@ -1823,7 +1992,7 @@ void preparedstatement::concpp99_batchRewrite()
 
     res.reset(stmt->executeQuery(selectQuery));
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (size_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       ASSERT(res->next());
       ASSERT_EQUALS(id[row], res->getInt(1));
       ASSERT_EQUALS(val[i][row], res->getString(2));
@@ -1833,12 +2002,11 @@ void preparedstatement::concpp99_batchRewrite()
     ASSERT(!res->next());
     ////// The same, but for executeLargeBatch
     stmt->executeUpdate(deleteQuery);
-    //const sql::Ints& batchRes2= ssps->executeBatch();
 
     pstmt->clearBatch();
     pstmt->clearParameters();
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (size_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       pstmt->setInt(1, id[row] + 3);
       pstmt->setString(2, val[0][row]);
       pstmt->addBatch();
@@ -1847,7 +2015,7 @@ void preparedstatement::concpp99_batchRewrite()
     ASSERT_EQUALS(3ULL, static_cast<uint64_t>(batchLRes.size()));
 
     res.reset(stmt->executeQuery(selectQuery));
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (size_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       ASSERT(res->next());
       ASSERT_EQUALS(id[row] + 3, res->getInt(1));
       ASSERT_EQUALS(val[i][row], res->getString(2));
@@ -1869,7 +2037,8 @@ void preparedstatement::concpp106_batchBulk()
   sql::ConnectOptionsMap connection_properties{ {"userName", user}, {"password", passwd}, {"useBulkStmts", "true"}, {"useTls", useTls ? "true" : "false"} };
 
   con.reset(driver->connect(url, connection_properties));
-  stmt.reset(con->createStatement());
+  // Reading results must be on the different connection to ensure that the driver commits the batch
+  stmt.reset(sspsCon->createStatement());
   createSchemaObject("TABLE", "concpp106_batchBulk", "(id int not NULL PRIMARY KEY, val VARCHAR(31))");
 
   const sql::SQLString insertQuery[]{ "INSERT INTO concpp106_batchBulk VALUES(?,?)",
@@ -1884,7 +2053,7 @@ void preparedstatement::concpp106_batchBulk()
     pstmt.reset(con->prepareStatement(insertQuery[i]));
     //ssps.reset(sspsCon->prepareStatement(insertQuery[i]));
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (uint32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       pstmt->setInt(1, id[row]);
       if (val[i][row] != nullptr) {
         pstmt->setString(2, val[0][row]);
@@ -1893,9 +2062,6 @@ void preparedstatement::concpp106_batchBulk()
         pstmt->setNull(2, sql::Types::VARCHAR);
       }
       pstmt->addBatch();
-      /*ssps->setInt(1, id[row]);
-      ssps->setString(2, val[0][row]);
-      ssps->addBatch();*/
     }
 
     logMsg("Executing batch");
@@ -1905,7 +2071,7 @@ void preparedstatement::concpp106_batchBulk()
 
     res.reset(stmt->executeQuery(selectQuery));
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (uint32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       ASSERT(res->next());
       ASSERT_EQUALS(id_expected[row], res->getInt(1));
       if (val_expected[i][row] == nullptr) {
@@ -1916,8 +2082,9 @@ void preparedstatement::concpp106_batchBulk()
       else {
         ASSERT_EQUALS(val_expected[i][row], res->getString(2));
       }
-      // With rewriteBatchedStatements we don't have separate results for each parameters set - only SUCCESS_NO_INFO
-      ASSERT_EQUALS(batchResult[i], batchRes[row]);
+      // With bulk we don't have separate results for each parameters set - only SUCCESS_NO_INFO.
+      // Unless with mysql where it is not supported
+      ASSERT_EQUALS(isMySQL() ? 1 : batchResult[i], batchRes[row]);
     }
     ASSERT(!res->next());
     ////// The same, but for executeLargeBatch
@@ -1927,7 +2094,7 @@ void preparedstatement::concpp106_batchBulk()
     pstmt->clearBatch();
     pstmt->clearParameters();
 
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (uint32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       pstmt->setInt(1, id[row] + 3);
       if (val[i][row] != nullptr) {
         pstmt->setString(2, val[0][row]);
@@ -1943,7 +2110,7 @@ void preparedstatement::concpp106_batchBulk()
     ASSERT_EQUALS(static_cast<uint64_t>(sizeof(id) / sizeof(id[0])), static_cast<uint64_t>(batchLRes.size()));
 
     res.reset(stmt->executeQuery(selectQuery));
-    for (int32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
+    for (uint32_t row = 0; row < sizeof(id) / sizeof(id[0]); ++row) {
       ASSERT(res->next());
       ASSERT_EQUALS(id_expected[row] + 3, res->getInt(1));
       if (val_expected[i][row] == nullptr) {
@@ -1955,13 +2122,100 @@ void preparedstatement::concpp106_batchBulk()
         ASSERT_EQUALS(val_expected[i][row], res->getString(2));
       }
       // With rewriteBatchedStatements we don't have separate results for each parameters set - only SUCCESS_NO_INFO
-      ASSERT_EQUALS(static_cast<int64_t>(batchResult[i]), batchLRes[row]);
+      ASSERT_EQUALS(isMySQL() ? 1LL : static_cast<int64_t>(batchResult[i]), batchLRes[row]);
     }
     ASSERT(!res->next());
     stmt->executeUpdate(deleteQuery);
   }
   // To make sure the framework provides next test with "standard" connection
   con.reset();
+}
+
+
+void preparedstatement::concpp116_getByte()
+{
+  pstmt.reset(sspsCon->prepareStatement("SELECT ?"));
+
+  // Check for all target locations of the segmentation fault
+  for (int8_t i = 0; i < 16; ++i)
+  {
+    int8_t value= i << 4;
+    pstmt->setByte(1, value);
+    res.reset(pstmt->executeQuery());
+    ASSERT(res->next());
+    ASSERT_EQUALS(value, res->getByte(1));
+  }
+
+  pstmt.reset(sspsCon->prepareStatement("SELECT '-128', 0xA1B2C3D4, 0x81, 0x881"));
+  res.reset(pstmt->executeQuery());
+  ASSERT(res->next());
+  ASSERT_EQUALS(-128, res->getByte(1));
+
+  ASSERT_EQUALS(int32_t(0xA1B2C3D4), res->getInt(2));
+
+  ASSERT_EQUALS(static_cast<int8_t>(129), res->getByte(3));
+  ASSERT_EQUALS(static_cast<int16_t>(129), res->getShort(3));
+  ASSERT_EQUALS(129, res->getInt(3));
+  ASSERT_EQUALS(129LL, res->getLong(3));
+  ASSERT_EQUALS(129, res->getUInt(3));
+  ASSERT_EQUALS(129ULL, res->getUInt64(3));
+
+  ASSERT_EQUALS(static_cast<int16_t>(2177), res->getShort(4));//0x881=2177
+  ASSERT_EQUALS(2177, res->getInt(4));
+  ASSERT_EQUALS(2177U, res->getUInt(4));
+  ASSERT_EQUALS(2177ULL, res->getUInt64(4));
+  ASSERT_EQUALS(2177LL, res->getLong(4));
+}
+
+/* CONCPP - 133 */
+void preparedstatement::multirs_caching()
+{
+  //SKIP("This is not working and won't be fixed in this version");
+
+  createSchemaObject("PROCEDURE", "ccpptest_multirs_caching", "()\
+                        BEGIN\
+                          SELECT 1 as id, 'text' as val UNION SELECT 7 as id, 'seven' as val;\
+                          SELECT 'some text';\
+                          SELECT 2;\
+                        END");
+
+  PreparedStatement pstmt1(sspsCon->prepareStatement("CALL ccpptest_multirs_caching()"));
+  ResultSet res1(pstmt1->executeQuery());
+  ASSERT(res1->next()); // next() does not read the record - only increments internal cursor position
+  /* We need stmt to use the same conneciton as pstmt1*/
+  stmt.reset(sspsCon->createStatement());
+  /* Executing another query - stmt1 has to cache pending results */
+  res.reset(stmt->executeQuery("SELECT 100"));
+  /* Making sure we are at same position after caching */
+  ASSERT_EQUALS(1, res1->getInt(1));
+  ASSERT_EQUALS("text", res1->getString("val"));
+  ASSERT(res1->next());
+  ASSERT_EQUALS(7, res1->getInt("id"));
+  ASSERT_EQUALS("seven", res1->getString(2));
+  ASSERT(!res1->next());
+  ASSERT(pstmt1->getMoreResults());
+  res1.reset(pstmt1->getResultSet());
+  ASSERT(res1->next());
+  ASSERT_EQUALS("some text", res1->getString(1));
+  ASSERT(!res1->next());
+  /* Now reading 2nd query result*/
+  ASSERT(res->next());
+  ASSERT_EQUALS(100, res->getInt(1));
+  ASSERT(!res->next());
+  ASSERT(!stmt->getMoreResults());
+  ASSERT_EQUALS(-1, stmt->getUpdateCount());
+  /* Getting back to 1st query */
+  ASSERT(pstmt1->getMoreResults());
+  res1.reset(pstmt1->getResultSet());
+  ASSERT(res1->next());
+  ASSERT_EQUALS(2, res1->getInt(1));
+  ASSERT(!res1->next());
+  // Now SP execution result code
+  ASSERT(!pstmt1->getMoreResults());
+  ASSERT_EQUALS(0, pstmt1->getUpdateCount());
+  // Nothing else
+  ASSERT(!pstmt1->getMoreResults());
+  ASSERT_EQUALS(-1, pstmt1->getUpdateCount());
 }
 
 } /* namespace preparedstatement */

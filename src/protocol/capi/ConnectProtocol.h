@@ -1,5 +1,5 @@
 /************************************************************************************
-   Copyright (C) 2020 MariaDB Corporation AB
+   Copyright (C) 2020,2023 MariaDB Corporation AB
 
    This library is free software; you can redistribute it and/or
    modify it under the terms of the GNU Library General Public
@@ -25,10 +25,11 @@
 #include <map>
 
 #include "Consts.h"
-
 #include "Protocol.h"
-
 #include "pool/GlobalStateInfo.h"
+
+#define CONST_QUERY(QUERY_STRING_LITERAL) realQuery(QUERY_STRING_LITERAL,sizeof(QUERY_STRING_LITERAL))
+#define SEND_CONST_QUERY(QUERY_STRING_LITERAL) sendQuery(QUERY_STRING_LITERAL,sizeof(QUERY_STRING_LITERAL))
 
 namespace sql
 {
@@ -66,38 +67,37 @@ namespace capi
   private:
     const SQLString username;
     //const LruTraceCache traceCache; /*new LruTraceCache()*/
-    //TODO: can it really be unique?
     std::unique_ptr<GlobalStateInfo> globalInfo;
 
   public:
-    bool hasWarningsFlag; /*false*/
+    bool hasWarningsFlag= false;
     /* This cannot be Shared as long as C/C stmt handle is owned by  statement(SSPS class in this case) object */
-    Weak::Results activeStreamingResult; /*NULL*/
-    uint32_t serverStatus;
+    Results* activeStreamingResult= nullptr;
+    uint32_t serverStatus= 0;
 
   protected:
     int32_t autoIncrementIncrement;
 
-    bool readOnly; /*false*/
-    FailoverProxy* proxy;
-    volatile bool connected; /*false*/
-    bool explicitClosed; /*false*/
+    bool readOnly= false;
+    FailoverProxy* proxy= nullptr;
+    std::atomic<bool> connected{false};
+    bool explicitClosed= false;
     SQLString database;
-    int64_t serverThreadId;
-    ServerPrepareStatementCache* serverPrepareStatementCache;
-    bool eofDeprecated; /*false*/
-    int64_t serverCapabilities;
-    int32_t socketTimeout;
+    int64_t serverThreadId= 0;
+    ServerPrepareStatementCache* serverPrepareStatementCache= nullptr;
+    bool eofDeprecated= false;
+    int64_t serverCapabilities= 0;
+    int32_t socketTimeout= 0;
 
   private:
     HostAddress currentHost;
-    bool hostFailed;
+    bool hostFailed= false;
     SQLString serverVersion;
-    bool serverMariaDb;
-    uint32_t majorVersion;
-    uint32_t minorVersion;
-    uint32_t patchVersion;
-    TimeZone* timeZone;
+    bool serverMariaDb= true;
+    uint32_t majorVersion= 0;
+    uint32_t minorVersion= 0;
+    uint32_t patchVersion= 0;
+    TimeZone* timeZone= nullptr;
 
   public:
     ConnectProtocol(std::shared_ptr<UrlParser>& urlParser, GlobalStateInfo* globalInfo, Shared::mutex& lock);
@@ -111,6 +111,13 @@ namespace capi
 
   protected:
     void realQuery(const SQLString& sql);
+    void commitReturnAutocommit(bool justReadMultiSendResults=false);
+    void sendQuery(const SQLString& sql);
+    void sendQuery(const char* query, std::size_t length);
+    //mysql_read_result
+    void readQueryResult();
+    void realQuery(const char* query, std::size_t length);
+
   public:
     void close();
     void abort();
@@ -155,6 +162,7 @@ namespace capi
 
 
     void compressionHandler(const Shared::Options& options);
+    void setConnectionAttributes(const SQLString& attributes);
     void assignStream(const Shared::Options& options);
     void postConnectionQueries();
     void sendPipelineAdditionalData();
@@ -225,8 +233,8 @@ namespace capi
     TimeZone* getTimeZone();
     const Shared::Options& getOptions() const;
     void setHasWarnings(bool hasWarnings);
-    Shared::Results getActiveStreamingResult();
-    void setActiveStreamingResult(Shared::Results& activeStreamingResult);
+    Results* getActiveStreamingResult();
+    void setActiveStreamingResult(Results* activeStreamingResult);
     void removeActiveStreamingResult();
     Shared::mutex& getLock();
     bool hasMoreResults();

@@ -68,6 +68,8 @@ public:
     TEST_CASE(addBatch);
     TEST_CASE(concpp99_batchRewrite);
     TEST_CASE(concpp107_setFetchSizeExeption);
+    TEST_CASE(otherstmts_result);
+    TEST_CASE(multirs_caching);
   }
 
   /**
@@ -120,6 +122,9 @@ public:
 
   /* Making sure that setFetchSize is doing no bad things while rs streaming is not supported */
   void concpp107_setFetchSizeExeption();
+
+  void otherstmts_result();
+  void multirs_caching();
 };
 
 REGISTER_FIXTURE(statement);

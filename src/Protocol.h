@@ -87,6 +87,7 @@ public:
   virtual const SQLString& getUsername() const=0;
   virtual bool ping()=0;
   virtual bool isValid(int32_t timeout)=0;
+
   virtual void executeQuery(const SQLString& sql)=0;
   virtual void executeQuery(bool mustExecuteOnMaster, Shared::Results& results, const SQLString& sql)= 0;
   virtual void executeQuery(bool mustExecuteOnMaster, Shared::Results& results, const SQLString& sql, const Charset* charset)= 0;
@@ -95,6 +96,7 @@ public:
   virtual void executeQuery(bool mustExecuteOnMaster, Shared::Results& results, ClientPrepareResult* clientPrepareResult,
     std::vector<Shared::ParameterHolder>& parameters,
     int32_t timeout)= 0;
+
   virtual bool executeBatchClient(bool mustExecuteOnMaster, Shared::Results& results, ClientPrepareResult* prepareResult,
     std::vector<std::vector<Shared::ParameterHolder>>& parametersList, bool hasLongData)=0;
   virtual void executeBatchStmt(bool mustExecuteOnMaster, Shared::Results& results, const std::vector<SQLString>& queries)= 0;
@@ -102,6 +104,7 @@ public:
     std::vector<Shared::ParameterHolder>& parameters)= 0;
   virtual bool executeBatchServer(bool mustExecuteOnMaster, ServerPrepareResult* serverPrepareResult, Shared::Results& results, const SQLString& sql,
                                   std::vector<std::vector<Shared::ParameterHolder>>& parameterList, bool hasLongData)= 0;
+
   virtual void moveToNextResult(Results* results, ServerPrepareResult* spr= nullptr)=0;
   virtual void getResult(Results* results, ServerPrepareResult *pr=nullptr, bool readAllResults= false)=0;
   virtual void cancelCurrentQuery()=0;
@@ -135,8 +138,8 @@ public:
   virtual void prolog(int64_t maxRows, bool hasProxy, MariaDbConnection* connection, MariaDbStatement* statement)= 0;
   virtual void prologProxy(ServerPrepareResult* serverPrepareResult, int64_t maxRows, bool hasProxy, MariaDbConnection* connection,
     MariaDbStatement* statement)= 0;
-  virtual Shared::Results getActiveStreamingResult()=0;
-  virtual void setActiveStreamingResult(Shared::Results& mariaSelectResultSet)=0;
+  virtual Results* getActiveStreamingResult()=0;
+  virtual void setActiveStreamingResult(Results* mariaSelectResultSet)=0;
   virtual Shared::mutex& getLock()=0;
   virtual void setServerStatus(uint32_t serverStatus)=0;
   virtual uint32_t getServerStatus()=0;
@@ -161,6 +164,8 @@ public:
   virtual bool isInterrupted()=0;
   virtual void stopIfInterrupted()=0;
   virtual void reconnect()=0;
+  virtual void skipAllResults(ServerPrepareResult* spr)=0;
+  virtual void skipAllResults()=0;
   /* I guess at some point we will need it */
   //virtual Protocol* clone();
   };

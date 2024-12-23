@@ -37,7 +37,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#ifndef _WIN32
+#if defined(__MINGW32__) || defined(__MINGW64__) || !defined(_WIN32)
 #include <inttypes.h>
 #endif
 
@@ -97,21 +97,12 @@ static int silent = 1;
 
 #include <stdio.h>
 
-
 #ifndef L64
-#ifdef _WIN32
-#define L64(x) x##i64
-#else
 #define L64(x) x##LL
-#endif
 #endif
 
 #ifndef UL64
-#ifdef _WIN32
-#define UL64(x) x##ui64
-#else
 #define UL64(x) x##ULL
-#endif
 #endif
 
 #define SSPS_USED() ((loops % 2) != 0)
@@ -284,7 +275,8 @@ static void test_connection_0(std::unique_ptr<sql::Connection> & conn)
   ENTER_FUNCTION();
   try {
     char buff[64];
-    if (std::getenv("MAXSCALE_TEST_DISABLE") != nullptr) {
+    if (std::getenv("MAXSCALE_TEST_DISABLE") != nullptr ||
+      std::getenv("srv") != nullptr && strcmp(std::getenv("srv"), "maxscale") == 0) {
         LEAVE_FUNCTION();
         return void();
     }
@@ -297,7 +289,7 @@ static void test_connection_0(std::unique_ptr<sql::Connection> & conn)
 
     ensure("connection is closed", !conn->isClosed());
 
-    sprintf(buff, "KILL %d", rset1->getInt(1));
+    snprintf(buff, sizeof(buff), "KILL %d", rset1->getInt(1));
 
     try {
       stmt1->execute(buff);
@@ -607,7 +599,7 @@ static void test_statement_5(std::unique_ptr<sql::Connection> & conn, std::uniqu
     /* Get a result set */
     try {
       std::unique_ptr<sql::ResultSet> rset(stmt->executeQuery("INSERT INTO test_function VALUES(2,200)"));
-      ensure("NULL returned for result set", rset.get() == NULL);
+      ensure("NULL returned for result set", rset.get() != NULL);
       ensure_equal_int("Non-empty result set", false, rset->next());
     } catch (sql::SQLException &) {
     } catch (...) {
@@ -962,7 +954,7 @@ static void test_result_set_1(std::unique_ptr<sql::Connection> & conn)
     std::unique_ptr<sql::ResultSet> rset2(stmt1->executeQuery("SELECT 1"));
     ensure("res2 is NULL", rset2.get() != NULL);
 
-    ensure("res1 is empty", rset1->next());
+    ensure("res1 is not closed", rset1->isClosed());
     ensure("res2 is empty", rset2->next() != false);
   } catch (sql::SQLException &e) {
     printf("\n# ERR: Caught sql::SQLException at %s::%d  [%s] (%d/%s)\n", CPPCONN_FUNC, __LINE__, e.what(), e.getErrorCode(), e.getSQLStateCStr());

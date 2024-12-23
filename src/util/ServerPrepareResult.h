@@ -1,5 +1,5 @@
 /************************************************************************************
-   Copyright (C) 2020 MariaDB Corporation AB
+   Copyright (C) 2020,2023 MariaDB Corporation AB
 
    This library is free software; you can redistribute it and/or
    modify it under the terms of the GNU Library General Public
@@ -51,22 +51,22 @@ class ServerPrepareResult  : public PrepareResult {
   std::unique_ptr<capi::MYSQL_RES, decltype(&capi::mysql_free_result)> metadata;
   std::vector<capi::MYSQL_BIND> paramBind;
   Protocol* unProxiedProtocol;
-  volatile int32_t shareCounter; /*1*/
-  volatile bool isBeingDeallocate;
+  std::atomic<int32_t> shareCounter{1};
+  std::atomic<bool> isBeingDeallocate{false};
   std::mutex lock;
 
 public:
   ~ServerPrepareResult();
 
   ServerPrepareResult(
-    SQLString sql,
+    const SQLString& sql,
     capi::MYSQL_STMT* statementId,
     std::vector<Shared::ColumnDefinition>& columns,
     std::vector<Shared::ColumnDefinition>& parameters,
     Protocol* unProxiedProtocol);
 
   ServerPrepareResult(
-    SQLString sql,
+    const SQLString& sql,
     capi::MYSQL_STMT* statementId,
     Protocol* unProxiedProtocol);
 
